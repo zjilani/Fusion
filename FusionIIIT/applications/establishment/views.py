@@ -2,7 +2,8 @@ from django.shortcuts import render
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
-from applications.globals.models import ExtraInfo, HoldsDesignation, Designation
+from applications.globals.models import ExtraInfo, HoldsDesignation, Designation, DepartmentInfo
+from notification.views import establishment_notif
 
 from datetime import datetime
 from .models import *
@@ -17,8 +18,19 @@ def is_admin(request):
     return request.user == Establishment_variables.objects.first().est_admin
 
 
+def get_admin():
+    return Establishment_variables.objects.first().est_admin
+
+
 def is_eligible(request):
     return True
+
+
+def is_fm(dictx):
+    for key in dictx.keys():
+        if 'fm_' in key:
+            return True
+    return False
 
 
 def is_cpda(dictx):
@@ -33,6 +45,106 @@ def is_ltc(dictx):
         if 'ltc' in key:
             return True
     return False
+
+
+# TODO THIS
+def handle_fm_admin(request):
+    if 'fm_new_employee' in request.POST:
+        # print (request.POST)
+        username = request.POST.get('username')
+        if User.objects.filter(username=username).exists():
+            messages.error(request, 'The given user ALREADY exists')
+            return
+
+        password = request.POST.get('password')
+        password2 = request.POST.get('password2')
+        if password != password2:
+            messages.error(request, 'The given passwords do not match.')
+            return
+
+        email = request.POST.get('email')
+        first_name = request.POST.get('first_name')
+        last_name = request.POST.get('last_name')
+        user = User.objects.create(
+            username = username,
+            first_name = first_name,
+            last_name = last_name,
+            email = email
+        )
+        user.set_password(password)
+        user.save()
+        
+        title = request.POST.get('title')
+        gender = request.POST.get('gender')
+        dob = request.POST.get('dob')
+        address = request.POST.get('address')
+        phone_no = request.POST.get('phone_no')
+        dept = request.POST.get('department')
+        department = DepartmentInfo.objects.filter(id=dept).first()
+        # I'm using username as an id for Extra_info
+        extra_info = ExtraInfo.objects.create(
+            id = username,
+            user = user,
+            title = title,
+            sex = gender,
+            date_of_birth = dob,
+            address = address,
+            phone_no = phone_no,
+            user_type = 'faculty',
+            department = department,
+        )
+        faculty = Faculty.objects.create(
+            id = extra_info
+        )
+
+        pf_number = request.POST.get('pf_number')
+        date_of_joining = request.POST.get('date_of_joining')
+        joining_payscale = request.POST.get('joining_payscale')
+        isVac = request.POST.get('isVacational')
+        if isVac == 'on':
+            isVacational = True
+        else:
+            isVacational = False
+        category = request.POST.get('category')
+        desig = request.POST.get('designation')
+        designation = Designation.objects.filter(id=desig).first()
+        pan_number = request.POST.get('pan_number')
+        aadhar_number = request.POST.get('aadhar_number')
+        local_address = request.POST.get('local_address')
+        marital_status = request.POST.get('marital_status')
+        spouse_name = request.POST.get('spouse_name')
+        children_info = request.POST.get('children_info')
+        personal_email_id = request.POST.get('personal_email_id')
+
+        faculty_info = Faculty_Info.objects.create(
+            faculty_user = faculty,
+            pf_number = pf_number,
+            joining_date = date_of_joining,
+            designation = designation,
+            joining_payscale = joining_payscale,
+            is_vacational = isVacational,
+            category = category,
+            pan_number = pan_number,
+            aadhar_number = aadhar_number,
+            local_address = local_address,
+            marital_status = marital_status,
+            spouse_name = spouse_name,
+            children_info = children_info,
+            personal_email_id = personal_email_id,
+            is_archived = False
+        )
+        HoldsDesignation.objects.create(
+            user = user,
+            working = user,
+            designation = designation,
+            held_at = datetime.now()
+        )
+        establishment_notif(user, user, 'fm_new_faculty')
+        messages.success(request, 'New Faculty user succesfully created')
+
+    # elif 'fm_edit_faculty' in request.POST:
+
+    # elif 'fm_delete_faculty' in request.POST:
 
 
 def handle_cpda_admin(request):
@@ -60,7 +172,8 @@ def handle_cpda_admin(request):
             application.tracking_info.review_status = 'under_review'
             application.tracking_info.save()
             
-            # add notif
+            # The reviewer is notified about the pending review
+            establishment_notif(request.user, reviewer_id, 'cpda_review_pending')
             messages.success(request, 'Reviewer assigned successfully!')
             # print (reviewer_design, ' ||| ', reviewer_id)
 
@@ -76,7 +189,13 @@ def handle_cpda_admin(request):
         application.save()
         # print (application)
 
-        # add notif
+        # Send notification to the cpda applicant
+        if status == 'approved':
+            establishment_notif(request.user, application.applicant, 'cpda_request_approved')
+        elif status == 'rejected':
+            establishment_notif(request.user, application.applicant, 'cpda_request_rejected')
+        elif status == 'finished':
+            establishment_notif(request.user, application.applicant, 'cpda_adjustment_finished')
         messages.success(request, 'Status updated successfully!')
 
 
@@ -106,7 +225,8 @@ def handle_ltc_admin(request):
                 application.tracking_info.review_status = 'under_review'
                 application.tracking_info.save()
                 
-                # add notif
+                # The reviewer is notified about the pending review
+                establishment_notif(request.user, reviewer_id, 'ltc_review_pending')
                 messages.success(request, 'Reviewer assigned successfully!')
                 # print (reviewer_design, ' ||| ', reviewer_id)
 
@@ -120,7 +240,11 @@ def handle_ltc_admin(request):
             application = Ltc_application.objects.get(id=app_id)
             application.status = status;
             application.save()
-            # add notif
+            # Send notification to the cpda applicant
+            if status == 'approved':
+                establishment_notif(request.user, application.applicant, 'ltc_request_approved')
+            elif status == 'rejected':
+                establishment_notif(request.user, application.applicant, 'ltc_request_rejected')
             messages.success(request, 'Status updated successfully!')
 
     elif 'ltc_new_eligible_user' in request.POST:
@@ -194,6 +318,16 @@ def handle_ltc_admin(request):
         eligible_user = Ltc_eligible_user.objects.get(user=user_id)
         eligible_user.delete()
         messages.success(request, 'User successfully removed from eligible LTC users')
+
+
+# TODO THIS
+def generate_fm_admin_lists(request):
+    new_employee_form = Employee_Registration_Form()
+    response = {
+        'admin': True,
+        'fm_add_employee_form' : new_employee_form
+    }
+    return response
 
 
 def generate_cpda_admin_lists(request):
@@ -336,7 +470,8 @@ def handle_cpda_eligible(request):
         )
         # print (application.tracking_info.application)
 
-        # add notif here
+        # Send notification to admin that new cpda application is created
+        establishment_notif(request.user, get_admin(), 'cpda_application_submit')
         messages.success(request, 'Request sent successfully!')
 
     elif 'cpda_adjust' in request.POST:
@@ -367,7 +502,9 @@ def handle_cpda_eligible(request):
         # get tracking info of a particular application
         application.tracking_info.review_status = 'to_assign'
         application.tracking_info.save()
-        # add notif here
+
+        # Send notification to admin that new cpda bills are submitted
+        establishment_notif(request.user, get_admin(), 'cpda_bills_submit')
         messages.success(request, 'Bills submitted successfully!')
         
     elif 'cpda_review' in request.POST:
@@ -379,7 +516,8 @@ def handle_cpda_eligible(request):
         application.tracking_info.remarks = review_comment
         application.tracking_info.review_status = 'reviewed'
         application.tracking_info.save()
-        # add notif here
+        # Send notification to admin that new cpdaapplication is created
+        establishment_notif(request.user, get_admin(), 'cpda_review_submit')
         messages.success(request, 'Review submitted successfully!')
 
 
@@ -437,7 +575,9 @@ def handle_ltc_eligible(request):
             review_status = 'to_assign'
         )
         # print (application.tracking_info.application)
-        # add notif here
+
+        # Send notification to admin that new cpda bills are submitted
+        establishment_notif(request.user, get_admin(), 'ltc_application_submit')
         messages.success(request, 'Request sent successfully!')
 
     if 'ltc_review' in request.POST:
@@ -449,7 +589,9 @@ def handle_ltc_eligible(request):
         application.tracking_info.remarks = review_comment
         application.tracking_info.review_status = 'reviewed'
         application.tracking_info.save()
-        # add notif here
+
+        # Send notification to admin that new cpda bills are submitted
+        establishment_notif(request.user, get_admin(), 'ltc_review_submit')
         messages.success(request, 'Review submitted successfully!')
 
 
@@ -543,6 +685,8 @@ def establishment(request):
     response.update(initial_checks(request))    
 
     if is_admin(request) and request.method == "POST": 
+        if is_fm(request.POST):
+            handle_fm_admin(request)
         if is_cpda(request.POST):
             handle_cpda_admin(request)
         if is_ltc(request.POST):
@@ -557,6 +701,7 @@ def establishment(request):
     ############################################################################
 
     if is_admin(request):
+        response.update(generate_fm_admin_lists(request))
         response.update(generate_cpda_admin_lists(request))
         response.update(generate_ltc_admin_lists(request))
         return render(request, 'establishment/establishment.html', response)
